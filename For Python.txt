@@ -1,0 +1,114 @@
+import pdfplumber, re,  sys, time, pandas, json, glob
+
+# Setup global variables
+workfile = ""
+# Setup CSV
+#curr_time = time.strftime("%Y%m%d-%H%M%S")
+#log = open(str(curr_time) + ".log","w")
+
+def main():
+    # Check if we are running on all pdfs
+    print("1")
+    argv = readfiles()
+    print("2")
+    asset_data = {}
+    asset_specs = {}
+    json_data = {}
+    print(argv)
+    # Run for each pdf given as an argument
+    for file in argv:
+        print("78")
+        try:
+            header_data = {}
+            with pdfplumber.open(file) as pdf:
+                index = 0
+                raw_text = ''
+                # Extract all raw text
+                while(index < len(pdf.pages)):
+                    page = pdf.pages[index]
+                    raw_text = '\n' + page.extract_text()
+                    if index < 1:
+                        get_headerData(raw_text, header_data)
+                    if index >= 0:                                
+                        if asset_data:
+                            print(asset_data)
+                            if asset_specs:
+                                json_data = {**header_data, **asset_data, **asset_specs}
+                                print(json_data)       
+                                df = pandas.DataFrame(json_data, index=[0])
+                                df.to_csv('test.csv', mode='a', header=False)
+                                asset_data = {}
+                                asset_specs = {}
+                                json_data = {}
+                            else:
+                                get_assetSpecs(raw_text, asset_specs)
+                        else:
+                            get_assetData(raw_text, asset_data)
+                    index += 1
+                    
+        except OSError:
+            print("ERROR")
+    #log.close()
+    print("1")
+def readfiles():
+    pdfs = []
+    for file in glob.glob("*.pdf"):
+        pdfs.append(file)
+    print(pdfs)
+    return pdfs
+
+# Preprocesses the raw text by removing all new lines and returning a dict (seperated by what was a newline)
+def preprocess_data(raw_text):
+    return [el.strip() for el in raw_text.splitlines() if el.strip()]
+
+# Get data that is always in the same spot.
+def get_headerData(raw_text, header_data = {}):
+    workfile = re.search(r'(\w{5}\d{10})',raw_text).group(1).strip()
+    header_data['Workfile'] = workfile
+    processed_text = preprocess_data(raw_text)
+    # Data that is always in the same spot
+    header_data['Published Date'] = re.search(r'(.{1,})',processed_text[0]).group(1).strip()
+    header_data['Customer'] = re.search(r'(.{1,})',processed_text[1]).group(1).strip()
+    header_data['Client'] = re.search(r'(Attention)(\s{1,})(\w{1,}\s{1,}\w{1,})',processed_text[4]).group(3).strip()
+    # Data that needs to be searched for.
+    header_data['File#'] = re.search(r'(File#\s{1,}:\s{1,})(.{1,}?)(\s{1})',raw_text).group(2).strip()
+    header_data['Policy#'] = re.search(r'(Policy#\s{1,}:\s{1,})(.{1,}?)(\s{1,}?Date)',raw_text).group(2).strip()
+    header_data['Assignment Date'] = re.search(r'(Assignment Date\s{1,}:\s{1,})((Jan(uary)?|Dec(ember)?|Feb(ruary)?|Mar(ch)?|Apr(il)?|May|Jun(e)?|Jul(y)?|Aug(ust)?|Sep(tember)?|Oct(ober)?|Nov(ember)?|Dec(ember)?)\s{1,}\d{1,2},\s{1}\d{4})',raw_text).group(2).strip()
+    header_data['Date of Loss'] = re.search(r'(Date Of Loss\s{1,}:\s{1,})(N/A|(Jan(uary)?|Dec(ember)?|Feb(ruary)?|Mar(ch)?|Apr(il)?|May|Jun(e)?|Jul(y)?|Aug(ust)?|Sep(tember)?|Oct(ober)?|Nov(ember)?|Dec(ember)?)\s{1,}\d{1,2},\s{1}\d{4})', raw_text).group(2).strip()
+    header_data['Market Area'] = re.search(r'(Market Area\s{1,}:\s{1,})(.{1,})(\s{1})',raw_text).group(2).strip()
+
+def get_assetData(raw_text, asset_data):
+    try:
+        asset_data['Asset'] = re.search(r'(Item\s{1,}:\s{1,})(\d{4}?.{1,})(Serial Number)',raw_text).group(2).strip()
+    except AttributeError:
+            pass
+    try:
+        asset_data['Serial Number'] = re.search(r'(Serial Number\s{1,}:\s{1,})(.{1,}?)(\s{1})',raw_text).group(2).strip()
+    except AttributeError:
+        pass
+    try:# FMV/ACV low/single
+        asset_data['FMV-Low'] = re.search(r'((Fair Market Value|(Actual Cash Value)) (of|in the)\s{1,}\$)((\d{1,}\,)?(\d{1,}))',raw_text).group(5).strip()
+    except AttributeError:
+        pass
+    try:# FMV high
+        asset_data['FMV-High'] = re.search(r'(Fair Market Value (of|in the)\s{1,}\$)((\d{1,}\,)?(\d{1,}))(.{1,}\$)((\d{1,}\,)?(\d{1,}))',raw_text).group(7).strip()
+    except AttributeError:
+        pass
+    try:# OLV/Auction value low/single
+        asset_data['OLV-Low'] = re.search(r'(public auction (of|in the)\s{1,}\$)(\d{1,}(,\d{2,})?)((-\$)(\d{1,}(,\d{2,})?))',raw_text).group(3).strip()
+    except AttributeError:
+        pass
+    try:# OLV high
+        asset_data['OLV-High'] = re.search(r'(public auction (of|in the)\s{1,}\$)(\d{1,}(,\d{2,})?)((-\$)(\d{1,}(,\d{2,})?))',raw_text).group(7).strip()
+    except AttributeError:
+        pass
+
+def get_assetSpecs(raw_text, asset_specs):
+    raw_specs = re.findall(r'(?:\•\s{4,8})(.{1,})(?:\n)?',raw_text)
+    index = 0
+    for spec in raw_specs:
+        asset_specs['Spec'+str(index)] = raw_specs[index]
+        index += 1
+
+if (__name__ == '__main__'):
+    main()
